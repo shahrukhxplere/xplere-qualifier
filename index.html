@@ -555,6 +555,92 @@ body::before {
   letter-spacing: 0.03em;
 }
 
+
+/* ── UPLOAD ZONE ── */
+.upload-zone {
+  border: 1.5px dashed var(--cyan-border);
+  border-radius: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  background: rgba(26,232,232,0.03);
+  position: relative;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--cyan);
+  background: rgba(26,232,232,0.07);
+}
+.upload-icon { font-size: 28px; margin-bottom: 8px; }
+.upload-title { font-size: 14px; color: var(--white80); margin-bottom: 4px; font-weight: 500; }
+.upload-sub { font-size: 12px; color: var(--white50); }
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--navy3);
+  border: 1px solid var(--white08);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.file-item-name { flex: 1; color: var(--white80); }
+.file-item-size { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--white50); }
+.file-item-remove { cursor: pointer; color: var(--white50); font-size: 16px; padding: 0 4px; }
+.file-item-remove:hover { color: var(--red); }
+
+.btn-analyse {
+  width: 100%;
+  padding: 14px 24px;
+  margin-top: 12px;
+  font-size: 15px;
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--cyan), #00a8e8);
+  color: var(--navy);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all .2s;
+  letter-spacing: .01em;
+}
+.btn-analyse:hover { opacity: .9; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(26,232,232,.3); }
+.btn-analyse:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--white50);
+}
+.progress-spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--white08);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  flex-shrink: 0;
+}
+.progress-bar-outer {
+  height: 4px;
+  background: var(--white08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-bar-inner {
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan), #00a8e8);
+  border-radius: 2px;
+  transition: width .4s ease;
+  width: 0%;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ── PRINT / PDF ── */
 @media print {
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -681,7 +767,27 @@ body::before {
       <label class="field-label">Source</label>
       <input class="field-input" id="sourceField" type="text" placeholder="e.g. Eitmad, Reference…" oninput="updateMeta()" />
     </div>
+
+  <!-- Document Upload Zone -->
+  <div class="slbl" style="margin-top:32px">Auto-score from documents <span style="font-size:10px;color:var(--amber);margin-left:8px;font-family:DM Mono,monospace;letter-spacing:0.05em">OPTIONAL</span></div>
+  <div id="uploadZone" class="upload-zone">
+    <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" style="display:none" onchange="handleFiles(this.files)">
+    <div class="upload-icon">📎</div>
+    <div class="upload-title">Drop RFP documents here or <span onclick="document.getElementById('fileInput').click()" style="color:var(--cyan);cursor:pointer;text-decoration:underline">browse</span></div>
+    <div class="upload-sub">PDF, Word, Excel, or text files · Multiple files supported</div>
   </div>
+  <div id="fileList" style="display:none;margin-top:10px"></div>
+  <button class="btn-analyse" id="analyseBtn" style="display:none" onclick="analyseDocuments()">
+    <span id="analyseBtnText">Auto-score from documents →</span>
+  </button>
+  <div id="analyseProgress" style="display:none">
+    <div class="progress-wrap">
+      <div class="progress-spinner"></div>
+      <span id="progressText">Reading documents…</span>
+    </div>
+    <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div>
+  </div>
+  <div id="analyseError" style="display:none;background:var(--red-dim);border:1px solid var(--red-bdr);border-radius:10px;padding:12px 16px;font-size:13px;color:#ff8f8f;margin-top:10px"></div>
 
   <!-- Score bands -->
   <div class="slbl bands-lbl">Qualification thresholds</div>
@@ -780,6 +886,10 @@ body::before {
 </div>
 
 <script>
+// ── CONFIG ──────────────────────────────────────────────
+var WORKER_URL = 'https://xplere-rfp-deply.shahrukh626.workers.dev';
+var API_KEY = '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';
+
 var CRITERIA = [
   { id:'industry', label:'Industry Fit', weight:20, num:'01', badge:null,
     desc:'What industry is this opportunity in?',
@@ -1018,6 +1128,217 @@ function resetAll() {
 
 renderCriteria();
 updateMeta();
+
+// ── DOCUMENT UPLOAD & AUTO-SCORE ────────────────────────
+
+var uploadedFiles = [];
+
+// Drag and drop
+var uploadZone = document.getElementById('uploadZone');
+uploadZone.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  uploadZone.classList.add('drag-over');
+});
+uploadZone.addEventListener('dragleave', function() {
+  uploadZone.classList.remove('drag-over');
+});
+uploadZone.addEventListener('drop', function(e) {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  handleFiles(e.dataTransfer.files);
+});
+uploadZone.addEventListener('click', function() {
+  document.getElementById('fileInput').click();
+});
+
+function handleFiles(files) {
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var exists = uploadedFiles.some(function(f) { return f.name === file.name; });
+    if (!exists) uploadedFiles.push(file);
+  }
+  renderFileList();
+}
+
+function renderFileList() {
+  var list = document.getElementById('fileList');
+  var btn = document.getElementById('analyseBtn');
+  if (uploadedFiles.length === 0) {
+    list.style.display = 'none';
+    btn.style.display = 'none';
+    return;
+  }
+  list.style.display = 'block';
+  btn.style.display = 'block';
+  list.innerHTML = uploadedFiles.map(function(f, i) {
+    var size = f.size > 1024*1024
+      ? (f.size/1024/1024).toFixed(1) + ' MB'
+      : (f.size/1024).toFixed(0) + ' KB';
+    return '<div class="file-item">'
+      + '<span style="font-size:16px">' + getFileIcon(f.name) + '</span>'
+      + '<span class="file-item-name">' + f.name + '</span>'
+      + '<span class="file-item-size">' + size + '</span>'
+      + '<span class="file-item-remove" onclick="removeFile(' + i + ')">✕</span>'
+      + '</div>';
+  }).join('');
+}
+
+function getFileIcon(name) {
+  var ext = name.split('.').pop().toLowerCase();
+  if (ext === 'pdf') return '📄';
+  if (ext === 'doc' || ext === 'docx') return '📝';
+  if (ext === 'xls' || ext === 'xlsx') return '📊';
+  return '📎';
+}
+
+function removeFile(idx) {
+  uploadedFiles.splice(idx, 1);
+  renderFileList();
+}
+
+function setProgress(pct, text) {
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressText').textContent = text;
+}
+
+function showAnalyseError(msg) {
+  var el = document.getElementById('analyseError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+function hideAnalyseError() {
+  document.getElementById('analyseError').style.display = 'none';
+}
+
+async function analyseDocuments() {
+  if (uploadedFiles.length === 0) return;
+
+  var btn = document.getElementById('analyseBtn');
+  var progress = document.getElementById('analyseProgress');
+  btn.disabled = true;
+  document.getElementById('analyseBtnText').textContent = 'Analysing…';
+  progress.style.display = 'block';
+  hideAnalyseError();
+
+  try {
+    setProgress(10, 'Preparing ' + uploadedFiles.length + ' document' + (uploadedFiles.length > 1 ? 's' : '') + '…');
+
+    var formData = new FormData();
+    for (var i = 0; i < uploadedFiles.length; i++) {
+      formData.append('files', uploadedFiles[i]);
+    }
+
+    setProgress(30, 'Sending documents for analysis…');
+
+    var response = await fetch(WORKER_URL, {
+      method: 'POST',
+      headers: {
+        'x-api-key': API_KEY,
+        'x-request-type': 'document'
+      },
+      body: formData
+    });
+
+    setProgress(70, 'AI is scoring your documents…');
+
+    if (!response.ok) {
+      var errText = await response.text();
+      throw new Error('Worker error ' + response.status + ': ' + errText.slice(0, 100));
+    }
+
+    var result = await response.json();
+    setProgress(95, 'Applying scores to scorecard…');
+
+    if (result.error) throw new Error(result.error);
+
+    // Auto-fill the form fields if found
+    if (result.clientName && !document.getElementById('clientName').value) {
+      document.getElementById('clientName').value = result.clientName;
+    }
+    if (result.rfpTitle && !document.getElementById('oppName').value) {
+      document.getElementById('oppName').value = result.rfpTitle;
+    }
+
+    // Apply scores to the scorecard
+    applyAIScores(result);
+
+    setProgress(100, 'Done — review and confirm scores below');
+    setTimeout(function() {
+      progress.style.display = 'none';
+      btn.disabled = false;
+      document.getElementById('analyseBtnText').textContent = 'Re-analyse documents →';
+      // Scroll to criteria
+      document.getElementById('criteriaList').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 1000);
+
+  } catch (err) {
+    progress.style.display = 'none';
+    btn.disabled = false;
+    document.getElementById('analyseBtnText').textContent = 'Auto-score from documents →';
+    showAnalyseError('Error: ' + err.message);
+  }
+}
+
+function applyAIScores(result) {
+  var scoreMap = {
+    industry:   result.scores && result.scores.industry,
+    scope:      result.scores && result.scores.scope,
+    compliance: result.scores && result.scores.compliance,
+    reference:  result.scores && result.scores.reference,
+    connection: result.scores && result.scores.connection,
+    budget:     result.scores && result.scores.budget,
+    partner:    result.scores && result.scores.partner
+  };
+
+  CRITERIA.forEach(function(c) {
+    var aiScore = scoreMap[c.id];
+    if (!aiScore) return;
+
+    // Find the option that matches the AI score
+    var matchedOpt = null;
+    var matchedIdx = -1;
+    c.opts.forEach(function(o, i) {
+      if (o.v === aiScore.score) {
+        matchedOpt = o;
+        matchedIdx = i;
+      }
+    });
+
+    // If no exact match, find closest
+    if (!matchedOpt) {
+      var closest = c.opts.reduce(function(prev, curr, i) {
+        return Math.abs(curr.v - aiScore.score) < Math.abs(prev.v - aiScore.score)
+          ? { opt: curr, idx: i }
+          : prev;
+      }, { opt: c.opts[c.opts.length-1], idx: c.opts.length-1 });
+      matchedOpt = closest.opt;
+      matchedIdx = closest.idx;
+    }
+
+    if (matchedOpt && matchedIdx >= 0) {
+      // Simulate clicking the option
+      var btn = document.querySelector('[data-crit="' + c.id + '"][data-v="' + matchedOpt.v + '"]');
+      if (btn) {
+        pick(btn);
+        // Add AI evidence tooltip styling
+        var card = document.getElementById('crit_' + c.id);
+        if (card && aiScore.reason) {
+          var existingEvidence = card.querySelector('.ai-evidence');
+          if (!existingEvidence) {
+            var ev = document.createElement('div');
+            ev.className = 'ai-evidence';
+            ev.style.cssText = 'font-size:11px;color:rgba(26,232,232,0.6);margin-top:8px;padding:8px 12px;background:rgba(26,232,232,0.05);border-radius:6px;border-left:2px solid rgba(26,232,232,0.3);font-family:DM Sans,sans-serif;line-height:1.5';
+            ev.innerHTML = '<strong style="color:rgba(26,232,232,0.8)">AI:</strong> ' + aiScore.reason
+              + (aiScore.evidence ? '<br><em style="color:rgba(255,255,255,0.35)">"' + aiScore.evidence.slice(0,120) + '"</em>' : '');
+            card.appendChild(ev);
+          }
+        }
+      }
+    }
+  });
+}
+
 </script>
 </body>
 </html>
